@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2026 Masterplan — Live Dashboard</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
+
+<style>
+/* KEEPING YOUR STYLES SAME (shortened here for clarity) */
+body { font-family: Arial; background:#0f172a; color:white; }
+.header { display:flex; justify-content:space-between; padding:20px; background:#020617; }
+.main { padding:20px; }
+.kpi-row { display:flex; gap:15px; margin-bottom:20px; }
+.kpi { background:#1e293b; padding:15px; border-radius:8px; }
+.kpi-value { font-size:22px; font-weight:bold; }
+table { width:100%; border-collapse:collapse; }
+td, th { padding:10px; border-bottom:1px solid #334155; }
+.green { color:#22c55e; }
+.red { color:#ef4444; }
+</style>
+</head>
+
+<body>
+
+<div class="header">
+  <h2>📊 2026 Masterplan Dashboard</h2>
+  <button onclick="loadData()">Refresh</button>
+</div>
+
+<div class="main">
+
+<div class="kpi-row">
+  <div class="kpi">
+    <div>Total P&L</div>
+    <div id="k-total">—</div>
+  </div>
+
+  <div class="kpi">
+    <div>Win Rate</div>
+    <div id="k-wr">—</div>
+  </div>
+
+  <div class="kpi">
+    <div>Positions</div>
+    <div id="k-count">—</div>
+  </div>
+</div>
+
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Stock</th>
+<th>Sector</th>
+<th>Account</th>
+<th>Entry</th>
+<th>CMP</th>
+<th>Qty</th>
+<th>Capital</th>
+<th>P&L</th>
+<th>P&L%</th>
+</tr>
+</thead>
+<tbody id="table-body"></tbody>
+</table>
+
+</div>
+
+<script>
+
+// ─── CONFIG ─────────────────────────────
+const PUBLISHED_ID = '2PACX-1vSAXjUvGp4pAr-GqyHEqTywyfWPG71BZwGsopoFK8rgiDGTQfe6iTD-l1OFBt6fiMFyrlQNji970GiC';
+const GID_SUMMARY = '852874521';
+const GID_JOURNAL = '1594820799';
+
+// ─── FETCH ─────────────────────────────
+async function fetchSheet(gid) {
+  const url = `https://docs.google.com/spreadsheets/d/e/${PUBLISHED_ID}/pub?gid=${gid}&single=true&output=csv`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Sheet fetch failed");
+  return await res.text();
+}
+
+// ─── CSV PARSER ────────────────────────
+function parseCSV(text) {
+  return text.split("\n").map(r => r.split(","));
+}
+
+const num = s => parseFloat((s||"").replace(/[₹,\s]/g,"")) || 0;
+
+// ─── PARSE JOURNAL ─────────────────────
+function parseJournal(rows) {
+
+  let header = {};
+  let start = -1;
+
+  for (let i=0;i<rows.length;i++) {
+    if (rows[i].includes("SR NO.") && rows[i].includes("LOT NAME")) {
+      start = i;
+      rows[i].forEach((c,j)=>header[c.trim()] = j);
+      break;
+    }
+  }
+
+  const trades = [];
+
+  for (let i=start+1;i<rows.length;i++) {
+    const r = rows[i];
+
+    if (!r[header["SR NO."]]) continue;
+
+    const t = {
+      symbol: r[header["LOT NAME"]],
+      sector: r[header["SECTOR"]],
+      account: r[header["ACCOUNT NAME"]],
+      entry: num(r[header["ENTRY PRICE"]]),
+      exit: num(r[header["EXIT"]]),
+      qty: num(r[header["QUANTITY"]]),
+      capital: num(r[header["CAPITAL"]]),
+      pl: num(r[header["P/L"]]),
+      pl_pct: num(r[header["P/L%"]])
+    };
+
+    if (t.symbol) trades.push(t);
+  }
+
+  return trades;
+}
+
+// ─── PARSE SUMMARY ─────────────────────
+function parseSummary(rows) {
+  let totalPL = 0;
+
+  rows.forEach(r => {
+    if (r.includes("TOTAL P/L")) {
+      const i = r.indexOf("TOTAL P/L");
+      totalPL = num(r[i+1]);
+    }
+  });
+
+  return totalPL;
+}
+
+// ─── MAIN LOAD ─────────────────────────
+async function loadData() {
+
+  const summaryCSV = await fetchSheet(GID_SUMMARY);
+  const journalCSV = await fetchSheet(GID_JOURNAL);
+
+  const summaryRows = parseCSV(summaryCSV);
+  const journalRows = parseCSV(journalCSV);
+
+  const totalPL = parseSummary(summaryRows);
+  const trades = parseJournal(journalRows);
+
+  // KPIs
+  const wins = trades.filter(t => t.pl > 0).length;
+
+  document.getElementById("k-total").innerText = "₹"+totalPL.toLocaleString();
+  document.getElementById("k-wr").innerText = ((wins/trades.length)*100).toFixed(1)+"%";
+  document.getElementById("k-count").innerText = trades.length;
+
+  // TABLE
+  document.getElementById("table-body").innerHTML =
+    trades.map((t,i)=>`
+      <tr>
+        <td>${i+1}</td>
+        <td>${t.symbol}</td>
+        <td>${t.sector}</td>
+        <td>${t.account}</td>
+        <td>${t.entry}</td>
+        <td>${t.exit}</td>
+        <td>${t.qty}</td>
+        <td>${t.capital}</td>
+        <td class="${t.pl>=0?'green':'red'}">${t.pl}</td>
+        <td class="${t.pl_pct>=0?'green':'red'}">${t.pl_pct}%</td>
+      </tr>
+    `).join("");
+}
+
+// AUTO LOAD
+loadData();
+
+</script>
+
+</body>
+</html>
