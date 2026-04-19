@@ -4,53 +4,52 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>2026 Masterplan — Live Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
-:root{
---bg:#f0f2f5;--card:#fff;--header:#0f1923;
---green:#22c55e;--red:#ef4444;--blue:#3b82f6;
---text:#1e293b;--muted:#64748b;
+:root {
+  --bg:#0b1220; --card:#111827; --text:#e2e8f0;
+  --green:#22c55e; --red:#ef4444;
 }
-body{margin:0;font-family:'Segoe UI';background:var(--bg);color:var(--text);}
-.header{background:var(--header);color:#fff;padding:16px 24px;display:flex;justify-content:space-between;}
-.main{padding:16px;display:grid;gap:16px;}
-.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;}
-.kpi{background:var(--card);padding:14px;border-radius:10px;}
-.kpi-value{font-size:22px;font-weight:800;}
-.chart-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
-.chart-card{background:#fff;padding:14px;border-radius:10px;}
-table{width:100%;border-collapse:collapse;}
-td,th{padding:8px;border-bottom:1px solid #eee;}
-.pl-pos{color:var(--green);} .pl-neg{color:var(--red);}
+body { margin:0; font-family:'Segoe UI'; background:var(--bg); color:var(--text); }
+
+.header {
+  display:flex; justify-content:space-between;
+  padding:16px 24px; background:#020617;
+}
+
+.kpis { display:flex; gap:12px; padding:16px; }
+.card { background:var(--card); padding:14px; border-radius:10px; }
+.value { font-size:20px; font-weight:bold; }
+
+.green {color:var(--green);} .red {color:var(--red);}
+
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:16px; }
+
+table { width:100%; border-collapse:collapse; }
+td,th { padding:10px; border-bottom:1px solid #1e293b; }
 </style>
 </head>
 
 <body>
 
 <div class="header">
-<h2>📊 2026 Masterplan</h2>
-<button onclick="loadData()">Refresh</button>
+  <h2>📊 2026 Masterplan</h2>
+  <button onclick="loadData()">Refresh</button>
 </div>
 
-<div class="main">
-
-<div class="kpi-row">
-<div class="kpi"><div>Total P&L</div><div id="k-total" class="kpi-value">—</div></div>
-<div class="kpi"><div>Win Rate</div><div id="k-wr" class="kpi-value">—</div></div>
-<div class="kpi"><div>Positions</div><div id="k-count" class="kpi-value">—</div></div>
+<div class="kpis">
+  <div class="card">Total P&L<div id="k-total" class="value">—</div></div>
+  <div class="card">Win Rate<div id="k-wr" class="value">—</div></div>
+  <div class="card">Positions<div id="k-count" class="value">—</div></div>
 </div>
 
-<div class="chart-row">
-<div class="chart-card"><canvas id="chart-winners"></canvas></div>
-<div class="chart-card"><canvas id="chart-losers"></canvas></div>
+<div class="grid">
+  <canvas id="winners"></canvas>
+  <canvas id="losers"></canvas>
 </div>
 
-<div class="chart-row">
-<div class="chart-card"><canvas id="chart-sector"></canvas></div>
-<div class="chart-card"><canvas id="chart-donut"></canvas></div>
-</div>
-
+<div style="padding:16px;">
 <table>
 <thead>
 <tr>
@@ -59,111 +58,87 @@ td,th{padding:8px;border-bottom:1px solid #eee;}
 <th>P&L</th><th>P&L%</th>
 </tr>
 </thead>
-<tbody id="table-body"></tbody>
+<tbody id="table"></tbody>
 </table>
-
 </div>
 
 <script>
 
 // CONFIG
-const PUBLISHED_ID='2PACX-1vSAXjUvGp4pAr-GqyHEqTywyfWPG71BZwGsopoFK8rgiDGTQfe6iTD-l1OFBt6fiMFyrlQNji970GiC';
-const GID_JOURNAL='1594820799';
+const PUBLISHED_ID = "2PACX-1vSAXjUvGp4pAr-GqyHEqTywyfWPG71BZwGsopoFK8rgiDGTQfe6iTD-l1OFBt6fiMFyrlQNji970GiC";
+const JOURNAL_GID = "1594820799";
 
 // FETCH
-async function fetchSheet(gid){
-const url=`https://docs.google.com/spreadsheets/d/e/${PUBLISHED_ID}/pub?gid=${gid}&single=true&output=csv`;
-return fetch(url).then(r=>r.text());
+async function fetchCSV(gid){
+  const url = `https://docs.google.com/spreadsheets/d/e/${PUBLISHED_ID}/pub?gid=${gid}&single=true&output=csv`;
+  const res = await fetch(url);
+  return res.text();
 }
 
-// CSV PARSER
-function parseCSV(text){
-const rows=[];let row=[],field='',inQ=false;
-for(let i=0;i<text.length;i++){
-const c=text[i];
-if(inQ){
-if(c=='"'&&text[i+1]=='"'){field+='"';i++;}
-else if(c=='"')inQ=false;
-else field+=c;
-}else{
-if(c=='"')inQ=true;
-else if(c==','){row.push(field);field='';}
-else if(c=='\n'){row.push(field);rows.push(row);row=[];field='';}
-else if(c!='\r')field+=c;
-}}
-return rows;
-}
+// PARSER
+function parseCSV(t){ return t.split("\n").map(r=>r.split(",")); }
+const num=s=>parseFloat((s||"").replace(/[₹,\s]/g,""))||0;
 
-const num=s=>parseFloat((s||'').replace(/[₹,\s]/g,''))||0;
+// PARSE TRADES
+function parse(rows){
+  let h={},start=-1;
+  for(let i=0;i<rows.length;i++){
+    if(rows[i].includes("SR NO.")){ start=i; rows[i].forEach((c,j)=>h[c]=j); break;}
+  }
 
-// PARSE
-function parseJournal(rows){
-let h={},start=-1;
-for(let i=0;i<rows.length;i++){
-if(rows[i].includes("SR NO.")&&rows[i].includes("LOT NAME")){
-start=i;rows[i].forEach((c,j)=>h[c.trim()]=j);break;
-}}
-const t=[];
-for(let i=start+1;i<rows.length;i++){
-const r=rows[i];
-if(!r[h["SR NO."]])continue;
-t.push({
-symbol:r[h["LOT NAME"]],
-sector:r[h["SECTOR"]],
-account:r[h["ACCOUNT NAME"]],
-entry:num(r[h["ENTRY PRICE"]]),
-exit:num(r[h["EXIT"]]),
-qty:num(r[h["QUANTITY"]]),
-pl:num(r[h["P/L"]]),
-pl_pct:num(r[h["P/L%"]])
-});
-}
-return t;
+  const out=[];
+  for(let i=start+1;i<rows.length;i++){
+    const r=rows[i];
+    if(!r[h["SR NO."]]) continue;
+
+    out.push({
+      symbol:r[h["LOT NAME"]],
+      sector:r[h["SECTOR"]],
+      account:r[h["ACCOUNT NAME"]],
+      entry:num(r[h["ENTRY PRICE"]]),
+      exit:num(r[h["EXIT"]]),
+      qty:num(r[h["QUANTITY"]]),
+      pl:num(r[h["P/L"]]),
+      pl_pct:num(r[h["P/L%"]])
+    });
+  }
+  return out;
 }
 
 // MAIN
 async function loadData(){
-const csv=await fetchSheet(GID_JOURNAL);
-const rows=parseCSV(csv);
-const trades=parseJournal(rows);
 
-const totalPL=trades.reduce((s,t)=>s+t.pl,0);
-const wins=trades.filter(t=>t.pl>0).length;
+  const csv = await fetchCSV(JOURNAL_GID);
+  const trades = parse(parseCSV(csv));
 
-document.getElementById("k-total").innerText="₹"+totalPL.toLocaleString();
-document.getElementById("k-wr").innerText=((wins/trades.length)*100).toFixed(1)+"%";
-document.getElementById("k-count").innerText=trades.length;
+  const total = trades.reduce((s,t)=>s+t.pl,0);
+  const wins = trades.filter(t=>t.pl>0).length;
 
-// TABLE
-document.getElementById("table-body").innerHTML=
-trades.map((t,i)=>`
-<tr>
-<td>${i+1}</td>
-<td>${t.symbol}</td>
-<td>${t.sector}</td>
-<td>${t.account}</td>
-<td>${t.entry}</td>
-<td>${t.exit}</td>
-<td>${t.qty}</td>
-<td class="${t.pl>=0?'pl-pos':'pl-neg'}">${t.pl}</td>
-<td class="${t.pl_pct>=0?'pl-pos':'pl-neg'}">${t.pl_pct}%</td>
-</tr>`).join("");
+  document.getElementById("k-total").innerText="₹"+total.toLocaleString();
+  document.getElementById("k-wr").innerText=((wins/trades.length)*100).toFixed(1)+"%";
+  document.getElementById("k-count").innerText=trades.length;
 
-// CHARTS
-const winsData=trades.filter(t=>t.pl>0).sort((a,b)=>b.pl-a.pl).slice(0,10);
-const lossData=trades.filter(t=>t.pl<0).sort((a,b)=>a.pl-b.pl).slice(0,10);
+  // TABLE
+  document.getElementById("table").innerHTML =
+    trades.map((t,i)=>`
+    <tr>
+      <td>${i+1}</td>
+      <td>${t.symbol}</td>
+      <td>${t.sector}</td>
+      <td>${t.account}</td>
+      <td>${t.entry}</td>
+      <td>${t.exit}</td>
+      <td>${t.qty}</td>
+      <td class="${t.pl>=0?'green':'red'}">${t.pl}</td>
+      <td class="${t.pl_pct>=0?'green':'red'}">${t.pl_pct}%</td>
+    </tr>`).join("");
 
-new Chart(chart-winners,{type:'bar',data:{labels:winsData.map(t=>t.symbol),datasets:[{data:winsData.map(t=>t.pl)}]}});
-new Chart(chart-losers,{type:'bar',data:{labels:lossData.map(t=>t.symbol),datasets:[{data:lossData.map(t=>t.pl)}]}});
+  // CHARTS
+  const win = trades.filter(t=>t.pl>0).slice(0,10);
+  const loss = trades.filter(t=>t.pl<0).slice(0,10);
 
-// SECTOR
-const sec={};
-trades.forEach(t=>sec[t.sector]=(sec[t.sector]||0)+t.pl);
-new Chart(chart-sector,{type:'bar',data:{labels:Object.keys(sec),datasets:[{data:Object.values(sec)}]}});
-
-// DONUT
-new Chart(chart-donut,{type:'doughnut',data:{labels:['Win','Loss'],datasets:[{data:[wins,trades.length-wins]}]}});
-
+  new Chart(winners,{type:'bar',data:{labels:win.map(t=>t.symbol),datasets:[{data:win.map(t=>t.pl)}]}});
+  new Chart(losers,{type:'bar',data:{labels:loss.map(t=>t.symbol),datasets:[{data:loss.map(t=>t.pl)}]}});
 }
 
 loadData();
