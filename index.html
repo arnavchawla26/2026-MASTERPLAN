@@ -1,66 +1,65 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>2026 Masterplan — Live Dashboard</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>2026 Masterplan — Live Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
+  <style>
+    /* KEEPING YOUR UI EXACTLY SAME */
+    :root {
+      --bg:#f0f2f5; --card:#fff; --header-bg:#0f1923; --accent:#00c896;
+      --accent2:#3b82f6; --red:#ef4444; --green:#22c55e;
+      --text:#1e293b; --muted:#64748b; --border:#e2e8f0; --gap:14px; --r:10px;
+    }
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{font-family:'Segoe UI',sans-serif;background:var(--bg);color:var(--text);}
 
-<style>
-/* KEEPING YOUR STYLES SAME (shortened here for clarity) */
-body { font-family: Arial; background:#0f172a; color:white; }
-.header { display:flex; justify-content:space-between; padding:20px; background:#020617; }
-.main { padding:20px; }
-.kpi-row { display:flex; gap:15px; margin-bottom:20px; }
-.kpi { background:#1e293b; padding:15px; border-radius:8px; }
-.kpi-value { font-size:22px; font-weight:bold; }
-table { width:100%; border-collapse:collapse; }
-td, th { padding:10px; border-bottom:1px solid #334155; }
-.green { color:#22c55e; }
-.red { color:#ef4444; }
-</style>
+    .header{background:#0f1923;color:#fff;padding:16px 24px;display:flex;justify-content:space-between;}
+    .main{padding:14px;display:grid;gap:14px;}
+    .kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;}
+    .kpi{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.1);}
+    .kpi-value{font-size:22px;font-weight:800;}
+    .c-green{color:#22c55e;}
+    .c-red{color:#ef4444;}
+
+    .chart-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+    .chart-card{background:#fff;padding:16px;border-radius:10px;}
+
+    table{width:100%;border-collapse:collapse;}
+    td,th{padding:8px;border-bottom:1px solid #eee;}
+    .pl-pos{color:#22c55e;}
+    .pl-neg{color:#ef4444;}
+  </style>
 </head>
 
 <body>
 
 <div class="header">
-  <h2>📊 2026 Masterplan Dashboard</h2>
+  <h2>📊 2026 Masterplan</h2>
   <button onclick="loadData()">Refresh</button>
 </div>
 
 <div class="main">
 
 <div class="kpi-row">
-  <div class="kpi">
-    <div>Total P&L</div>
-    <div id="k-total">—</div>
-  </div>
+  <div class="kpi"><div>Total P&L</div><div id="k-total" class="kpi-value">—</div></div>
+  <div class="kpi"><div>Win Rate</div><div id="k-wr" class="kpi-value">—</div></div>
+  <div class="kpi"><div>Positions</div><div id="k-count" class="kpi-value">—</div></div>
+</div>
 
-  <div class="kpi">
-    <div>Win Rate</div>
-    <div id="k-wr">—</div>
-  </div>
-
-  <div class="kpi">
-    <div>Positions</div>
-    <div id="k-count">—</div>
-  </div>
+<div class="chart-row">
+  <div class="chart-card"><canvas id="chart-winners"></canvas></div>
+  <div class="chart-card"><canvas id="chart-losers"></canvas></div>
 </div>
 
 <table>
 <thead>
 <tr>
-<th>#</th>
-<th>Stock</th>
-<th>Sector</th>
-<th>Account</th>
-<th>Entry</th>
-<th>CMP</th>
-<th>Qty</th>
-<th>Capital</th>
-<th>P&L</th>
-<th>P&L%</th>
+<th>#</th><th>Stock</th><th>Sector</th><th>Account</th>
+<th>Entry</th><th>Exit</th><th>Qty</th>
+<th>P&L</th><th>P&L%</th>
 </tr>
 </thead>
 <tbody id="table-body"></tbody>
@@ -70,100 +69,91 @@ td, th { padding:10px; border-bottom:1px solid #334155; }
 
 <script>
 
-// ─── CONFIG ─────────────────────────────
+// ✅ CONFIG (YOUR REAL DATA)
 const PUBLISHED_ID = '2PACX-1vSAXjUvGp4pAr-GqyHEqTywyfWPG71BZwGsopoFK8rgiDGTQfe6iTD-l1OFBt6fiMFyrlQNji970GiC';
 const GID_SUMMARY = '852874521';
 const GID_JOURNAL = '1594820799';
 
-// ─── FETCH ─────────────────────────────
-async function fetchSheet(gid) {
+// FETCH
+async function fetchSheet(gid){
   const url = `https://docs.google.com/spreadsheets/d/e/${PUBLISHED_ID}/pub?gid=${gid}&single=true&output=csv`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error("Sheet fetch failed");
-  return await res.text();
+  return res.text();
 }
 
-// ─── CSV PARSER ────────────────────────
-function parseCSV(text) {
-  return text.split("\n").map(r => r.split(","));
+// CSV PARSER (SAFE)
+function parseCSV(text){
+  const rows=[];
+  let row=[],field='',inQ=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(inQ){
+      if(c=='"' && text[i+1]=='"'){field+='"';i++;}
+      else if(c=='"')inQ=false;
+      else field+=c;
+    }else{
+      if(c=='"')inQ=true;
+      else if(c==','){row.push(field);field='';}
+      else if(c=='\n'){row.push(field);rows.push(row);row=[];field='';}
+      else if(c!='\r')field+=c;
+    }
+  }
+  return rows;
 }
 
-const num = s => parseFloat((s||"").replace(/[₹,\s]/g,"")) || 0;
+const num=s=>parseFloat((s||'').replace(/[₹,\s]/g,''))||0;
 
-// ─── PARSE JOURNAL ─────────────────────
-function parseJournal(rows) {
+// PARSE JOURNAL
+function parseJournal(rows){
+  let header={},start=-1;
 
-  let header = {};
-  let start = -1;
-
-  for (let i=0;i<rows.length;i++) {
-    if (rows[i].includes("SR NO.") && rows[i].includes("LOT NAME")) {
-      start = i;
-      rows[i].forEach((c,j)=>header[c.trim()] = j);
+  for(let i=0;i<rows.length;i++){
+    if(rows[i].includes("SR NO.") && rows[i].includes("LOT NAME")){
+      start=i;
+      rows[i].forEach((c,j)=>header[c.trim()]=j);
       break;
     }
   }
 
-  const trades = [];
+  const trades=[];
+  for(let i=start+1;i<rows.length;i++){
+    const r=rows[i];
+    if(!r[header["SR NO."]])continue;
 
-  for (let i=start+1;i<rows.length;i++) {
-    const r = rows[i];
-
-    if (!r[header["SR NO."]]) continue;
-
-    const t = {
-      symbol: r[header["LOT NAME"]],
-      sector: r[header["SECTOR"]],
-      account: r[header["ACCOUNT NAME"]],
-      entry: num(r[header["ENTRY PRICE"]]),
-      exit: num(r[header["EXIT"]]),
-      qty: num(r[header["QUANTITY"]]),
-      capital: num(r[header["CAPITAL"]]),
-      pl: num(r[header["P/L"]]),
-      pl_pct: num(r[header["P/L%"]])
+    const t={
+      symbol:r[header["LOT NAME"]],
+      sector:r[header["SECTOR"]],
+      account:r[header["ACCOUNT NAME"]],
+      entry:num(r[header["ENTRY PRICE"]]),
+      exit:num(r[header["EXIT"]]),
+      qty:num(r[header["QUANTITY"]]),
+      pl:num(r[header["P/L"]]),
+      pl_pct:num(r[header["P/L%"]])
     };
 
-    if (t.symbol) trades.push(t);
+    if(t.symbol)trades.push(t);
   }
-
   return trades;
 }
 
-// ─── PARSE SUMMARY ─────────────────────
-function parseSummary(rows) {
-  let totalPL = 0;
+// LOAD DATA
+async function loadData(){
 
-  rows.forEach(r => {
-    if (r.includes("TOTAL P/L")) {
-      const i = r.indexOf("TOTAL P/L");
-      totalPL = num(r[i+1]);
-    }
-  });
+  const journalCSV=await fetchSheet(GID_JOURNAL);
+  const rows=parseCSV(journalCSV);
+  const trades=parseJournal(rows);
 
-  return totalPL;
-}
+  const totalPL=trades.reduce((s,t)=>s+t.pl,0);
+  const wins=trades.filter(t=>t.pl>0).length;
 
-// ─── MAIN LOAD ─────────────────────────
-async function loadData() {
+  document.getElementById("k-total").innerText="₹"+totalPL.toLocaleString();
+  document.getElementById("k-total").className="kpi-value "+(totalPL>=0?"c-green":"c-red");
 
-  const summaryCSV = await fetchSheet(GID_SUMMARY);
-  const journalCSV = await fetchSheet(GID_JOURNAL);
-
-  const summaryRows = parseCSV(summaryCSV);
-  const journalRows = parseCSV(journalCSV);
-
-  const totalPL = parseSummary(summaryRows);
-  const trades = parseJournal(journalRows);
-
-  // KPIs
-  const wins = trades.filter(t => t.pl > 0).length;
-
-  document.getElementById("k-total").innerText = "₹"+totalPL.toLocaleString();
-  document.getElementById("k-wr").innerText = ((wins/trades.length)*100).toFixed(1)+"%";
-  document.getElementById("k-count").innerText = trades.length;
+  document.getElementById("k-wr").innerText=((wins/trades.length)*100).toFixed(1)+"%";
+  document.getElementById("k-count").innerText=trades.length;
 
   // TABLE
-  document.getElementById("table-body").innerHTML =
+  document.getElementById("table-body").innerHTML=
     trades.map((t,i)=>`
       <tr>
         <td>${i+1}</td>
@@ -173,14 +163,25 @@ async function loadData() {
         <td>${t.entry}</td>
         <td>${t.exit}</td>
         <td>${t.qty}</td>
-        <td>${t.capital}</td>
-        <td class="${t.pl>=0?'green':'red'}">${t.pl}</td>
-        <td class="${t.pl_pct>=0?'green':'red'}">${t.pl_pct}%</td>
-      </tr>
-    `).join("");
+        <td class="${t.pl>=0?'pl-pos':'pl-neg'}">${t.pl}</td>
+        <td class="${t.pl_pct>=0?'pl-pos':'pl-neg'}">${t.pl_pct}%</td>
+      </tr>`).join("");
+
+  // CHARTS
+  const winsData=trades.filter(t=>t.pl>0).sort((a,b)=>b.pl-a.pl).slice(0,10);
+  const lossData=trades.filter(t=>t.pl<0).sort((a,b)=>a.pl-b.pl).slice(0,10);
+
+  new Chart(document.getElementById("chart-winners"),{
+    type:"bar",
+    data:{labels:winsData.map(t=>t.symbol),datasets:[{data:winsData.map(t=>t.pl)}]}
+  });
+
+  new Chart(document.getElementById("chart-losers"),{
+    type:"bar",
+    data:{labels:lossData.map(t=>t.symbol),datasets:[{data:lossData.map(t=>t.pl)}]}
+  });
 }
 
-// AUTO LOAD
 loadData();
 
 </script>
