@@ -1,149 +1,156 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>2026 Masterplan — Live Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
-<style>
-:root {
-  --bg:#0b1220; --card:#111827; --text:#e2e8f0;
-  --green:#22c55e; --red:#ef4444;
-}
-body { margin:0; font-family:'Segoe UI'; background:var(--bg); color:var(--text); }
-
-.header {
-  display:flex; justify-content:space-between;
-  padding:16px 24px; background:#020617;
-}
-
-.kpis { display:flex; gap:12px; padding:16px; }
-.card { background:var(--card); padding:14px; border-radius:10px; }
-.value { font-size:20px; font-weight:bold; }
-
-.green {color:var(--green);} .red {color:var(--red);}
-
-.grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:16px; }
-
-table { width:100%; border-collapse:collapse; }
-td,th { padding:10px; border-bottom:1px solid #1e293b; }
-</style>
-</head>
-
-<body>
-
-<div class="header">
-  <h2>📊 2026 Masterplan</h2>
-  <button onclick="loadData()">Refresh</button>
-</div>
-
-<div class="kpis">
-  <div class="card">Total P&L<div id="k-total" class="value">—</div></div>
-  <div class="card">Win Rate<div id="k-wr" class="value">—</div></div>
-  <div class="card">Positions<div id="k-count" class="value">—</div></div>
-</div>
-
-<div class="grid">
-  <canvas id="winners"></canvas>
-  <canvas id="losers"></canvas>
-</div>
-
-<div style="padding:16px;">
-<table>
-<thead>
-<tr>
-<th>#</th><th>Stock</th><th>Sector</th><th>Account</th>
-<th>Entry</th><th>Exit</th><th>Qty</th>
-<th>P&L</th><th>P&L%</th>
-</tr>
-</thead>
-<tbody id="table"></tbody>
-</table>
-</div>
-
 <script>
+// ─── CONFIG ───────────────────────────────────────────────────────
+const PUBLISHED_ID = '2PACX-1vSAXjUvGp4pAr-GqyHEqTywyfWPG71BZwGsopoFK8rgiDGTQfe6iTD-l1OFBt6fiMFyrlQNji970GiC';
 
-// CONFIG
-const PUBLISHED_ID = "2PACX-1vSAXjUvGp4pAr-GqyHEqTywyfWPG71BZwGsopoFK8rgiDGTQfe6iTD-l1OFBt6fiMFyrlQNji970GiC";
-const JOURNAL_GID = "1594820799";
+const SHEETS = {
+  STOCK: '852874521',
+  JOURNAL: '1594820799'
+};
 
-// FETCH
-async function fetchCSV(gid){
-  const url = `https://docs.google.com/spreadsheets/d/e/${PUBLISHED_ID}/pub?gid=${gid}&single=true&output=csv`;
+// ✅ Stable fetch using GID
+async function fetchSheet(gid) {
+  const url = `https://docs.google.com/spreadsheets/d/e/${PUBLISHED_ID}/pub?output=csv&gid=${gid}`;
   const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch');
   return res.text();
 }
 
-// PARSER
-function parseCSV(t){ return t.split("\n").map(r=>r.split(",")); }
-const num=s=>parseFloat((s||"").replace(/[₹,\s]/g,""))||0;
+// ─── CHART INSTANCES ──────────────────────────────────────────────
+const charts = {};
 
-// PARSE TRADES
-function parse(rows){
-  let h={},start=-1;
-  for(let i=0;i<rows.length;i++){
-    if(rows[i].includes("SR NO.")){ start=i; rows[i].forEach((c,j)=>h[c]=j); break;}
+// ─── CSV PARSER ──────────────────────────────────────────────────
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i+1] === '"') { field += '"'; i++; }
+      else if (c === '"') inQ = false;
+      else field += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ',') { row.push(field.trim()); field = ''; }
+      else if (c === '\n') { row.push(field.trim()); rows.push(row); row = []; field = ''; }
+      else if (c !== '\r') field += c;
+    }
   }
-
-  const out=[];
-  for(let i=start+1;i<rows.length;i++){
-    const r=rows[i];
-    if(!r[h["SR NO."]]) continue;
-
-    out.push({
-      symbol:r[h["LOT NAME"]],
-      sector:r[h["SECTOR"]],
-      account:r[h["ACCOUNT NAME"]],
-      entry:num(r[h["ENTRY PRICE"]]),
-      exit:num(r[h["EXIT"]]),
-      qty:num(r[h["QUANTITY"]]),
-      pl:num(r[h["P/L"]]),
-      pl_pct:num(r[h["P/L%"]])
-    });
-  }
-  return out;
+  if (field || row.length) { row.push(field.trim()); rows.push(row); }
+  return rows;
 }
 
-// MAIN
-async function loadData(){
+const num = s => parseFloat((s||'').replace(/[₹,\s]/g,'')) || 0;
 
-  const csv = await fetchCSV(JOURNAL_GID);
-  const trades = parse(parseCSV(csv));
+// ─── PARSE STOCK SUMMARY ─────────────────────────────────────────
+function parseStockSummary(csv) {
+  const rows = parseCSV(csv);
+  let totalPL = 0, date = '';
+  const lots = [];
+  let inLots = false;
 
-  const total = trades.reduce((s,t)=>s+t.pl,0);
-  const wins = trades.filter(t=>t.pl>0).length;
+  for (const r of rows) {
+    const tpIdx = r.findIndex(c => c === 'TOTAL P/L');
+    if (tpIdx >= 0) { totalPL = num(r[tpIdx+1]); date = r[tpIdx+2] || ''; }
 
-  document.getElementById("k-total").innerText="₹"+total.toLocaleString();
-  document.getElementById("k-wr").innerText=((wins/trades.length)*100).toFixed(1)+"%";
-  document.getElementById("k-count").innerText=trades.length;
+    if (r.includes('LOT NAME') && r.includes('P/L')) { inLots = true; continue; }
 
-  // TABLE
-  document.getElementById("table").innerHTML =
-    trades.map((t,i)=>`
-    <tr>
-      <td>${i+1}</td>
-      <td>${t.symbol}</td>
-      <td>${t.sector}</td>
-      <td>${t.account}</td>
-      <td>${t.entry}</td>
-      <td>${t.exit}</td>
-      <td>${t.qty}</td>
-      <td class="${t.pl>=0?'green':'red'}">${t.pl}</td>
-      <td class="${t.pl_pct>=0?'green':'red'}">${t.pl_pct}%</td>
-    </tr>`).join("");
-
-  // CHARTS
-  const win = trades.filter(t=>t.pl>0).slice(0,10);
-  const loss = trades.filter(t=>t.pl<0).slice(0,10);
-
-  new Chart(winners,{type:'bar',data:{labels:win.map(t=>t.symbol),datasets:[{data:win.map(t=>t.pl)}]}});
-  new Chart(losers,{type:'bar',data:{labels:loss.map(t=>t.symbol),datasets:[{data:loss.map(t=>t.pl)}]}});
+    if (inLots) {
+      const cells = r.filter(c => c !== '');
+      if (cells.length >= 2 && cells[0] !== 'LOT NAME') {
+        const pl = num(cells[1]);
+        if (!isNaN(pl)) lots.push({ symbol: cells[0], pl });
+      }
+    }
+  }
+  return { totalPL, date, lots };
 }
 
-loadData();
+// ─── PARSE TRADING JOURNAL ───────────────────────────────────────
+function parseTradingJournal(csv) {
+  const rows = parseCSV(csv);
+  const trades = [];
+  let headerIdx = -1;
+  let hMap = {};
+  let aprilCapital = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+
+    if (r.includes('SR NO.') && r.includes('LOT NAME')) {
+      headerIdx = i;
+      r.forEach((c, j) => { hMap[c.trim()] = j; });
+      continue;
+    }
+
+    if (headerIdx >= 0 && r[hMap['SR NO.']] && /^\d+$/.test(r[hMap['SR NO.']])) {
+      const t = {
+        sr: parseInt(r[hMap['SR NO.']]) || 0,
+        sector: r[hMap['SECTOR']] || 'OTHER',
+        account: r[hMap['ACCOUNT NAME']] || '',
+        entry_date: r[hMap['ENTRY DATE']] || '',
+        symbol: r[hMap['LOT NAME']] || '',
+        entry: num(r[hMap['ENTRY PRICE']]),
+        qty: num(r[hMap['QUANTITY']]),
+        capital: num(r[hMap['CAPITAL']]),
+        exit: num(r[hMap['EXIT']]),
+        pl: num(r[hMap['P/L']]),
+        pl_pct: num(r[hMap['P/L%']]),
+      };
+
+      if (t.symbol && t.capital > 0) {
+        trades.push(t);
+        aprilCapital += t.capital;
+      }
+    }
+  }
+
+  return { trades, aprilCapital };
+}
+
+// ─── MERGE TRADES ───────────────────────────────────────────────
+function mergeTrades(raw) {
+  const map = {};
+  raw.forEach(t => {
+    if (!map[t.symbol]) {
+      map[t.symbol] = { ...t, accounts: [t.account] };
+    } else {
+      const m = map[t.symbol];
+      const totalQty = m.qty + t.qty;
+      m.entry = (m.entry * m.qty + t.entry * t.qty) / totalQty;
+      m.qty = totalQty;
+      m.capital += t.capital;
+      m.pl += t.pl;
+      if (!m.accounts.includes(t.account)) m.accounts.push(t.account);
+      m.account = m.accounts.join(' · ');
+    }
+  });
+
+  return Object.values(map);
+}
+
+// ─── MAIN LOAD ───────────────────────────────────────────────────
+async function loadData() {
+  try {
+    const summaryCSV = await fetchSheet(SHEETS.STOCK);
+    const journalCSV = await fetchSheet(SHEETS.JOURNAL);
+
+    const stockData = parseStockSummary(summaryCSV);
+    const journalData = parseTradingJournal(journalCSV);
+
+    const merged = mergeTrades(journalData.trades);
+
+    console.log("✅ Loaded successfully");
+    console.log(stockData, journalData, merged);
+
+    document.getElementById('loading-overlay').classList.add('hidden');
+
+  } catch (e) {
+    document.getElementById('loading-overlay').classList.add('hidden');
+    document.getElementById('error-overlay').classList.remove('hidden');
+    document.getElementById('error-msg').textContent = e.message;
+  }
+}
+
+window.onload = loadData;
 
 </script>
-
-</body>
-</html>
